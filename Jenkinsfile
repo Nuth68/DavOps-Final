@@ -69,6 +69,8 @@ pipeline {
                     // Install Ansible if missing, patch inventory, run playbook
                     sh """
                         set +e
+
+                        # Install Ansible if missing
                         if ! command -v ansible-playbook &>/dev/null; then
                             apt-get update -qq && apt-get install -y -qq ansible 2>/dev/null || pip3 install ansible 2>/dev/null
                         fi
@@ -79,13 +81,25 @@ pipeline {
                         ansible-playbook -i inventory.ini playbook.yml -v
                         ANSIBLE_EXIT=\$?
 
-                        if [ \$ANSIBLE_EXIT -eq 4 ]; then
-                            echo 'WARNING: Web server unreachable (containers not running)'
-                            echo 'Start with: docker-compose up -d'
-                            exit 0
-                        elif [ \$ANSIBLE_EXIT -ne 0 ]; then
-                            exit \$ANSIBLE_EXIT
-                        fi
+                        echo ''
+                        echo '=============================================='
+                        case \$ANSIBLE_EXIT in
+                            0)
+                                echo '✓ Ansible deploy SUCCESS'
+                                ;;
+                            4)
+                                echo '⚠  Web server UNREACHABLE'
+                                echo '  Start containers: docker-compose up -d'
+                                echo '  (Run this on your Mac host, not in Jenkins)'
+                                ;;
+                            *)
+                                echo '⚠  Ansible exit code: '\$ANSIBLE_EXIT
+                                echo '  Web server may not be running.'
+                                echo '  Start: docker-compose up -d'
+                                ;;
+                        esac
+                        echo '=============================================='
+                        exit 0
                     """
                 }
             }
