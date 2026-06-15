@@ -55,3 +55,18 @@ services:
       MYSQL_DATABASE: PRAVE_Vinuth-db
     ports:
       - "3307:3306"
+
+  # ─── phpMyAdmin ──────────────────────────────────────────────────────
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: phpmyadmin
+    restart: always
+    ports:
+      - "8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: Hello@123
+    depends_on:
+      - db

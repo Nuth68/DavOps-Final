@@ -152,6 +152,34 @@
           - "Backend: web-server:80"
           - "Virtual IP: host.docker.internal"
 
+# ─── Setup phpMyAdmin ──────────────────────────────────────────────────
+- name: Setup phpMyAdmin for MySQL management
+  hosts: localhost
+  connection: local
+  vars:
+    pma_port: 8081
+
+  tasks:
+    - name: Check if phpMyAdmin container exists
+      shell: docker ps --filter name=phpmyadmin | grep -c phpmyadmin || true
+      register: pma_status
+      changed_when: false
+
+    - name: Start phpMyAdmin if not running
+      shell: docker-compose up -d phpmyadmin
+      args:
+        chdir: /Users/mac/Downloads/demo 2
+      when: pma_status.stdout == "0"
+
+    - name: phpMyAdmin access info
+      debug:
+        msg:
+          - "phpMyAdmin: http://localhost:{{ pma_port }}"
+          - "Remote: http://<host-ip>:{{ pma_port }}"
+          - "Server: db (MySQL 8.0)"
+          - "User: root / Password: Hello@123"
+          - "Database: PRAVE_Vinuth-db (7 tables)"
+
 # ─── Backup MySQL Database ─────────────────────────────────────────────
 - name: Backup MySQL database
   hosts: localhost
