@@ -151,7 +151,7 @@ Deployed — Test DB: H2 | Prod DB: MySQL (PRAVE_Vinuth-db) | Backup saved.""",
 
     post {
         failure {
-            echo "Pipeline FAILED — email sent to ${EMAIL_RECIPIENTS}"
+            echo "Pipeline FAILED — email sent to ${env.EMAIL_RECIPIENTS}"
         }
         success {
             echo "Pipeline SUCCESS — ${PROJECT_NAME} built, tested, and deployed"
