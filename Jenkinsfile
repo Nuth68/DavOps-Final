@@ -2,15 +2,15 @@ pipeline {
     agent any
 
     triggers {
-        // Poll SCM every 5 minutes
         pollSCM('H/5 * * * *')
     }
 
     environment {
-        APP_DIR           = '/app'
-        ANSIBLE_DIR       = 'ansible'
         PROJECT_NAME      = 'Football Terrain Rental'
         ALERT_CC_EMAIL    = 'pravevinuth888@gmail.com'
+        // Jenkins on macOS doesn't include Homebrew paths — add them explicitly
+        PATH              = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH}"
+        JAVA_HOME         = '/opt/homebrew/Cellar/openjdk/25.0.2/libexec/openjdk.jdk/Contents/Home'
     }
 
     stages {
@@ -19,10 +19,9 @@ pipeline {
             steps {
                 checkout scm
                 script {
-                    // Make mvnw executable (fixes exit code 127)
                     sh 'chmod +x ./mvnw'
+                    sh 'echo "PATH=$PATH"; echo "JAVA_HOME=$JAVA_HOME"; which java; java -version 2>&1; which ansible-playbook'
 
-                    // Capture the last commit author email for failure notifications
                     env.GIT_COMMITTER_EMAIL = sh(
                         script: "git --no-pager log -1 --format='%ae' HEAD",
                         returnStdout: true
@@ -35,7 +34,6 @@ pipeline {
                         script: "git --no-pager log -1 --format='%s' HEAD",
                         returnStdout: true
                     ).trim()
-                    // NOTE: emailext does NOT support 'cc' parameter! Merge emails into 'to' field instead.
                     env.EMAIL_RECIPIENTS = "${env.GIT_COMMITTER_EMAIL}, ${env.ALERT_CC_EMAIL}"
                     echo "Last commit by: ${env.GIT_COMMITTER_NAME} <${env.GIT_COMMITTER_EMAIL}>"
                     echo "Message: ${env.GIT_COMMIT_MSG}"
@@ -46,17 +44,14 @@ pipeline {
         stage('Build') {
             steps {
                 echo 'Building project with Maven (compile only)...'
-                sh '''#!/bin/bash
-                    export JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo ${JAVA_HOME})
-                    ./mvnw clean compile -q
-                '''
+                sh './mvnw clean compile -q'
             }
             post {
                 failure {
                     script {
                         emailext(
                             to: env.EMAIL_RECIPIENTS,
-                            subject: "[BUILD FAILED] ${PROJECT_NAME} - Build stage",
+                            subject: "[BUILD FAILED] ${PROJECT_NAME}",
                             body: """BUILD FAILURE — ${PROJECT_NAME}
 
 Commit:  ${GIT_COMMIT_MSG}
@@ -76,17 +71,14 @@ Check console output for details.""",
         stage('Test') {
             steps {
                 echo 'Running tests with H2 in-memory test database...'
-                sh '''#!/bin/bash
-                    export JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo ${JAVA_HOME})
-                    ./mvnw test
-                '''
+                sh './mvnw test'
             }
             post {
                 failure {
                     script {
                         emailext(
                             to: env.EMAIL_RECIPIENTS,
-                            subject: "[TEST FAILED] ${PROJECT_NAME} - Test stage",
+                            subject: "[TEST FAILED] ${PROJECT_NAME}",
                             body: """TEST FAILURE — ${PROJECT_NAME}
 
 Commit:  ${GIT_COMMIT_MSG}
@@ -111,8 +103,8 @@ Tests failed. Check console output.""",
             }
             steps {
                 echo 'Running Ansible playbook to deploy to web server...'
-                sh '''#!/bin/bash
-                    cd "${ANSIBLE_DIR}"
+                sh '''
+                    cd ansible
                     ansible-playbook -i inventory.ini playbook.yml -v
                 '''
             }
@@ -121,7 +113,7 @@ Tests failed. Check console output.""",
                     script {
                         emailext(
                             to: env.EMAIL_RECIPIENTS,
-                            subject: "[DEPLOY FAILED] ${PROJECT_NAME} - Ansible deployment",
+                            subject: "[DEPLOY FAILED] ${PROJECT_NAME}",
                             body: """DEPLOYMENT FAILURE — ${PROJECT_NAME}
 
 Commit:  ${GIT_COMMIT_MSG}
@@ -147,7 +139,7 @@ Author:  ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
 Branch:  ${GIT_BRANCH}
 Jenkins: ${BUILD_URL}
 
-Deployed: Test DB=H2 in-memory, Prod DB=MySQL (PRAVE_Vinuth-db), Backup saved.""",
+Deployed — Test DB: H2 | Prod DB: MySQL (PRAVE_Vinuth-db) | Backup saved.""",
                             mimeType: 'text/plain',
                             attachLog: true
                         )
