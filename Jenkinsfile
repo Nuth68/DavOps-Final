@@ -6,8 +6,8 @@ pipeline {
     }
 
     environment {
-        PROJECT_NAME      = 'Football Terrain Rental'
-        ALERT_CC_EMAIL    = 'pravevinuth888@gmail.com'
+        PROJECT_NAME   = 'Football Terrain Rental'
+        ALERT_EMAIL    = 'pravevinuth888@gmail.com'
     }
 
     stages {
@@ -15,183 +15,184 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
+
                 script {
-                    sh 'chmod +x ./mvnw'
+                    sh 'chmod -R +x . || true'
 
-                    // Capture committer info (MUST happen before any failure skips it)
-                    env.GIT_COMMITTER_EMAIL = sh(
-                        script: "git --no-pager log -1 --format='%ae' HEAD",
-                        returnStdout: true
-                    ).trim()
-                    env.GIT_COMMITTER_NAME = sh(
-                        script: "git --no-pager log -1 --format='%an' HEAD",
-                        returnStdout: true
-                    ).trim()
-                    env.GIT_COMMIT_MSG = sh(
-                        script: "git --no-pager log -1 --format='%s' HEAD",
-                        returnStdout: true
-                    ).trim()
-                    env.EMAIL_RECIPIENTS = "${env.GIT_COMMITTER_EMAIL}, ${env.ALERT_CC_EMAIL}"
+                    // Get git info safely
+                    def commitEmail = sh(script: "git log -1 --pretty=format:'%ae' || true", returnStdout: true).trim()
+                    def commitName  = sh(script: "git log -1 --pretty=format:'%an' || true", returnStdout: true).trim()
+                    def commitMsg   = sh(script: "git log -1 --pretty=format:'%s' || true", returnStdout: true).trim()
 
-                    echo "Last commit by: ${env.GIT_COMMITTER_NAME} <${env.GIT_COMMITTER_EMAIL}>"
-                    echo "Message: ${env.GIT_COMMIT_MSG}"
+                    if (commitEmail == "" || commitEmail == "null") {
+                        commitEmail = env.ALERT_EMAIL
+                    }
 
-                    // Diagnostic: show what tools are available (non-fatal)
-                    sh '''#!/bin/bash
-                        echo "=== Environment ==="
-                        echo "PATH=$PATH"
-                        echo "JAVA_HOME=$JAVA_HOME"
-                        echo ""
-                        echo "=== Java ==="
-                        which java || echo "java NOT FOUND"
-                        java -version 2>&1 || true
-                        echo ""
-                        echo "=== Maven ==="
-                        which mvn || echo "mvn NOT FOUND"
-                        ./mvnw --version 2>&1 || true
-                        echo ""
-                        echo "=== Ansible ==="
-                        which ansible-playbook || echo "ansible-playbook NOT FOUND — will install if needed"
-                        echo ""
-                        echo "=== Python/pip ==="
-                        which python3 || which python || echo "python NOT FOUND"
-                    '''
+                    env.GIT_COMMITTER_EMAIL = commitEmail
+                    env.GIT_COMMITTER_NAME  = commitName
+                    env.GIT_COMMIT_MSG      = commitMsg
+
+                    env.EMAIL_RECIPIENTS = "${commitEmail},${env.ALERT_EMAIL}"
+
+                    echo "Committer: ${commitName} <${commitEmail}>"
+                    echo "Message: ${commitMsg}"
                 }
             }
         }
 
         stage('Build') {
             steps {
-                echo 'Building project with Maven (compile only)...'
-                sh './mvnw clean compile -q'
+                script {
+                    sh '''
+                        echo "=== BUILD STAGE ==="
+                        ls -la
+
+                        if [ -f mvnw ]; then
+                            echo "Using Maven Wrapper"
+                            chmod +x mvnw
+                            ./mvnw clean compile -e
+                        else
+                            echo "mvnw not found — using system Maven"
+                            mvn -v || (echo "ERROR: Maven not installed" && exit 4)
+                            mvn clean compile -e
+                        fi
+                    '''
+                }
             }
+
             post {
                 failure {
-                    script {
-                        emailext(
-                            to: env.EMAIL_RECIPIENTS ?: env.ALERT_CC_EMAIL,
-                            subject: "[BUILD FAILED] ${PROJECT_NAME}",
-                            body: """BUILD FAILURE — ${PROJECT_NAME}
+                    emailext(
+                        to: env.EMAIL_RECIPIENTS,
+                        subject: "[FAILED BUILD] ${env.PROJECT_NAME}",
+                        body: """BUILD FAILED
 
-Commit:  ${GIT_COMMIT_MSG}
-Author:  ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-Branch:  ${GIT_BRANCH}
-Jenkins: ${BUILD_URL}
+Project: ${env.PROJECT_NAME}
+Commit: ${env.GIT_COMMIT_MSG}
+Author: ${env.GIT_COMMITTER_NAME} <${env.GIT_COMMITTER_EMAIL}>
+Branch: ${env.GIT_BRANCH ?: 'unknown'}
+Build URL: ${env.BUILD_URL}
 
-Check console output for details.""",
-                            mimeType: 'text/plain',
-                            attachLog: true
-                        )
-                    }
+Check logs for details.
+""",
+                        mimeType: 'text/plain',
+                        attachLog: true
+                    )
                 }
             }
         }
 
         stage('Test') {
             steps {
-                echo 'Running tests with H2 in-memory test database...'
-                sh './mvnw test'
+                script {
+                    sh '''
+                        echo "=== TEST STAGE ==="
+                        if [ -f mvnw ]; then
+                            ./mvnw test
+                        else
+                            mvn test
+                        fi
+                    '''
+                }
             }
+
             post {
                 failure {
-                    script {
-                        emailext(
-                            to: env.EMAIL_RECIPIENTS ?: env.ALERT_CC_EMAIL,
-                            subject: "[TEST FAILED] ${PROJECT_NAME}",
-                            body: """TEST FAILURE — ${PROJECT_NAME}
+                    emailext(
+                        to: env.EMAIL_RECIPIENTS,
+                        subject: "[FAILED TEST] ${env.PROJECT_NAME}",
+                        body: """TEST FAILED
 
-Commit:  ${GIT_COMMIT_MSG}
-Author:  ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-Branch:  ${GIT_BRANCH}
-Jenkins: ${BUILD_URL}
+Project: ${env.PROJECT_NAME}
+Commit: ${env.GIT_COMMIT_MSG}
+Author: ${env.GIT_COMMITTER_NAME}
+Build URL: ${env.BUILD_URL}
 
-Tests failed. Check console output.""",
-                            mimeType: 'text/plain',
-                            attachLog: true
-                        )
-                    }
+Tests failed.
+""",
+                        attachLog: true
+                    )
                 }
             }
         }
 
         stage('Deploy with Ansible') {
-            when {
-                expression {
-                    currentBuild.result == null || currentBuild.result == 'SUCCESS'
-                }
-            }
             steps {
-                echo 'Running Ansible playbook to deploy to web server...'
-                sh '''#!/bin/bash
-                    # Install ansible if not present (Jenkins Docker agent may not have it)
-                    if ! command -v ansible-playbook &>/dev/null; then
-                        echo "Installing ansible..."
-                        if command -v apt-get &>/dev/null; then
-                            apt-get update -qq && apt-get install -y -qq ansible
-                        elif command -v pip3 &>/dev/null; then
-                            pip3 install ansible
-                        elif command -v pip &>/dev/null; then
-                            pip install ansible
-                        elif command -v brew &>/dev/null; then
-                            brew install ansible
+                script {
+                    sh '''
+                        echo "=== DEPLOY STAGE ==="
+
+                        if ! command -v ansible-playbook &>/dev/null; then
+                            echo "Installing Ansible..."
+
+                            if command -v apt-get &>/dev/null; then
+                                apt-get update -qq
+                                apt-get install -y -qq ansible
+                            elif command -v pip3 &>/dev/null; then
+                                pip3 install ansible
+                            else
+                                echo "ERROR: Cannot install Ansible"
+                                exit 1
+                            fi
+                        fi
+
+                        ansible-playbook --version
+
+                        if [ -d ansible ]; then
+                            cd ansible
+                            ansible-playbook -i inventory.ini playbook.yml -v
                         else
-                            echo "ERROR: Cannot install ansible — no package manager found"
+                            echo "ERROR: ansible folder not found"
                             exit 1
                         fi
-                    fi
-                    ansible-playbook --version
-
-                    cd ansible
-                    ansible-playbook -i inventory.ini playbook.yml -v
-                '''
-            }
-            post {
-                failure {
-                    script {
-                        emailext(
-                            to: env.EMAIL_RECIPIENTS ?: env.ALERT_CC_EMAIL,
-                            subject: "[DEPLOY FAILED] ${PROJECT_NAME}",
-                            body: """DEPLOYMENT FAILURE — ${PROJECT_NAME}
-
-Commit:  ${GIT_COMMIT_MSG}
-Author:  ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-Branch:  ${GIT_BRANCH}
-Jenkins: ${BUILD_URL}
-
-Ansible playbook failed. Check console output.""",
-                            mimeType: 'text/plain',
-                            attachLog: true
-                        )
-                    }
+                    '''
                 }
+            }
+
+            post {
                 success {
-                    script {
-                        emailext(
-                            to: env.EMAIL_RECIPIENTS ?: env.ALERT_CC_EMAIL,
-                            subject: "[DEPLOY SUCCESS] ${PROJECT_NAME} deployed",
-                            body: """DEPLOYMENT SUCCESS — ${PROJECT_NAME}
+                    emailext(
+                        to: env.EMAIL_RECIPIENTS,
+                        subject: "[DEPLOY SUCCESS] ${env.PROJECT_NAME}",
+                        body: """DEPLOYMENT SUCCESS
 
-Commit:  ${GIT_COMMIT_MSG}
-Author:  ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-Branch:  ${GIT_BRANCH}
-Jenkins: ${BUILD_URL}
+Project: ${env.PROJECT_NAME}
+Commit: ${env.GIT_COMMIT_MSG}
+Author: ${env.GIT_COMMITTER_NAME}
+Build URL: ${env.BUILD_URL}
 
-Deployed — Test DB: H2 | Prod DB: MySQL (PRAVE_Vinuth-db) | Backup saved.""",
-                            mimeType: 'text/plain',
-                            attachLog: true
-                        )
-                    }
+Deployment completed successfully.
+""",
+                        attachLog: true
+                    )
+                }
+
+                failure {
+                    emailext(
+                        to: env.EMAIL_RECIPIENTS,
+                        subject: "[DEPLOY FAILED] ${env.PROJECT_NAME}",
+                        body: """DEPLOYMENT FAILED
+
+Project: ${env.PROJECT_NAME}
+Commit: ${env.GIT_COMMIT_MSG}
+Build URL: ${env.BUILD_URL}
+
+Check Ansible logs.
+""",
+                        attachLog: true
+                    )
                 }
             }
         }
     }
 
     post {
-        failure {
-            echo "Pipeline FAILED — email sent to ${env.EMAIL_RECIPIENTS}"
-        }
         success {
-            echo "Pipeline SUCCESS — ${PROJECT_NAME} built, tested, and deployed"
+            echo "PIPELINE SUCCESS — ${env.PROJECT_NAME}"
+        }
+
+        failure {
+            echo "PIPELINE FAILED — emails sent to ${env.EMAIL_RECIPIENTS}"
         }
     }
 }
