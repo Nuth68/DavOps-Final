@@ -2,7 +2,7 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install base packages and adoptium repo for JDK 23
+# Install base packages and adoptium repo for JDK 23___
 RUN apt-get update && \
     apt-get install -y wget apt-transport-https gnupg && \
     mkdir -p /usr/share/keyrings && \
@@ -29,13 +29,4 @@ WORKDIR /app
 
 EXPOSE 80 22
 
-CMD ["bash", "-c", "\
-  service ssh start && \
-  echo 'Waiting for MySQL to be ready (15s)...' && \
-  sleep 15 && \
-  echo 'Starting Spring Boot application...' && \
-  java -jar /app/target/demo-0.0.1-SNAPSHOT.jar & \
-  sleep 10 && \
-  echo 'Starting NGINX...' && \
-  exec /usr/sbin/nginx -g 'daemon off;' \
-"]
+
