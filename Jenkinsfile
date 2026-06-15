@@ -19,6 +19,9 @@ pipeline {
             steps {
                 checkout scm
                 script {
+                    // Make mvnw executable (fixes exit code 127)
+                    sh 'chmod +x ./mvnw'
+
                     // Capture the last commit author email for failure notifications
                     env.GIT_COMMITTER_EMAIL = sh(
                         script: "git --no-pager log -1 --format='%ae' HEAD",
@@ -32,6 +35,8 @@ pipeline {
                         script: "git --no-pager log -1 --format='%s' HEAD",
                         returnStdout: true
                     ).trim()
+                    // NOTE: emailext does NOT support 'cc' parameter! Merge emails into 'to' field instead.
+                    env.EMAIL_RECIPIENTS = "${env.GIT_COMMITTER_EMAIL}, ${env.ALERT_CC_EMAIL}"
                     echo "Last commit by: ${env.GIT_COMMITTER_NAME} <${env.GIT_COMMITTER_EMAIL}>"
                     echo "Message: ${env.GIT_COMMIT_MSG}"
                 }
@@ -40,28 +45,28 @@ pipeline {
 
         stage('Build') {
             steps {
-                echo 'Building project with Maven (skip tests for faster build)...'
-                sh '''
+                echo 'Building project with Maven (compile only)...'
+                sh '''#!/bin/bash
                     export JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo ${JAVA_HOME})
-                    ./mvnw clean compile -q 2>&1
+                    ./mvnw clean compile -q
                 '''
             }
             post {
                 failure {
                     script {
                         emailext(
-                            to: env.GIT_COMMITTER_EMAIL,
-                            cc: env.ALERT_CC_EMAIL,
-                            subject: "[BUILD FAILED] ${env.PROJECT_NAME} - Build stage",
-                            body: """BUILD FAILURE — ${env.PROJECT_NAME}
+                            to: env.EMAIL_RECIPIENTS,
+                            subject: "[BUILD FAILED] ${PROJECT_NAME} - Build stage",
+                            body: """BUILD FAILURE — ${PROJECT_NAME}
 
-Commit:  ${env.GIT_COMMIT_MSG}
-Author:  ${env.GIT_COMMITTER_NAME} <${env.GIT_COMMITTER_EMAIL}>
-Branch:  ${env.GIT_BRANCH}
-Jenkins: ${env.BUILD_URL}
+Commit:  ${GIT_COMMIT_MSG}
+Author:  ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
+Branch:  ${GIT_BRANCH}
+Jenkins: ${BUILD_URL}
 
-Please check the console output for details.""",
-                            mimeType: 'text/plain'
+Check console output for details.""",
+                            mimeType: 'text/plain',
+                            attachLog: true
                         )
                     }
                 }
@@ -70,28 +75,28 @@ Please check the console output for details.""",
 
         stage('Test') {
             steps {
-                echo 'Running tests with H2 in-memory database...'
-                sh '''
+                echo 'Running tests with H2 in-memory test database...'
+                sh '''#!/bin/bash
                     export JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo ${JAVA_HOME})
-                    ./mvnw test 2>&1
+                    ./mvnw test
                 '''
             }
             post {
                 failure {
                     script {
                         emailext(
-                            to: env.GIT_COMMITTER_EMAIL,
-                            cc: env.ALERT_CC_EMAIL,
-                            subject: "[TEST FAILED] ${env.PROJECT_NAME} - Test stage",
-                            body: """TEST FAILURE — ${env.PROJECT_NAME}
+                            to: env.EMAIL_RECIPIENTS,
+                            subject: "[TEST FAILED] ${PROJECT_NAME} - Test stage",
+                            body: """TEST FAILURE — ${PROJECT_NAME}
 
-Commit:  ${env.GIT_COMMIT_MSG}
-Author:  ${env.GIT_COMMITTER_NAME} <${env.GIT_COMMITTER_EMAIL}>
-Branch:  ${env.GIT_BRANCH}
-Jenkins: ${env.BUILD_URL}
+Commit:  ${GIT_COMMIT_MSG}
+Author:  ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
+Branch:  ${GIT_BRANCH}
+Jenkins: ${BUILD_URL}
 
-Tests failed. Please check the console output for details.""",
-                            mimeType: 'text/plain'
+Tests failed. Check console output.""",
+                            mimeType: 'text/plain',
+                            attachLog: true
                         )
                     }
                 }
@@ -101,56 +106,50 @@ Tests failed. Please check the console output for details.""",
         stage('Deploy with Ansible') {
             when {
                 expression {
-                    // Only deploy if build and test stages passed
                     currentBuild.result == null || currentBuild.result == 'SUCCESS'
                 }
             }
             steps {
                 echo 'Running Ansible playbook to deploy to web server...'
-                sh '''
+                sh '''#!/bin/bash
                     cd "${ANSIBLE_DIR}"
-
-                    # Ensure SSH key or use ansible password from inventory
-                    ansible-playbook -i inventory.ini playbook.yml -v 2>&1
+                    ansible-playbook -i inventory.ini playbook.yml -v
                 '''
             }
             post {
                 failure {
                     script {
                         emailext(
-                            to: env.GIT_COMMITTER_EMAIL,
-                            cc: env.ALERT_CC_EMAIL,
-                            subject: "[DEPLOY FAILED] ${env.PROJECT_NAME} - Ansible deployment",
-                            body: """DEPLOYMENT FAILURE — ${env.PROJECT_NAME}
+                            to: env.EMAIL_RECIPIENTS,
+                            subject: "[DEPLOY FAILED] ${PROJECT_NAME} - Ansible deployment",
+                            body: """DEPLOYMENT FAILURE — ${PROJECT_NAME}
 
-Commit:  ${env.GIT_COMMIT_MSG}
-Author:  ${env.GIT_COMMITTER_NAME} <${env.GIT_COMMITTER_EMAIL}>
-Branch:  ${env.GIT_BRANCH}
-Jenkins: ${env.BUILD_URL}
+Commit:  ${GIT_COMMIT_MSG}
+Author:  ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
+Branch:  ${GIT_BRANCH}
+Jenkins: ${BUILD_URL}
 
-Ansible playbook failed. Please check the console output.""",
-                            mimeType: 'text/plain'
+Ansible playbook failed. Check console output.""",
+                            mimeType: 'text/plain',
+                            attachLog: true
                         )
                     }
                 }
                 success {
                     script {
                         emailext(
-                            to: env.GIT_COMMITTER_EMAIL,
-                            cc: env.ALERT_CC_EMAIL,
-                            subject: "[DEPLOY SUCCESS] ${env.PROJECT_NAME} deployed",
-                            body: """DEPLOYMENT SUCCESS — ${env.PROJECT_NAME}
+                            to: env.EMAIL_RECIPIENTS,
+                            subject: "[DEPLOY SUCCESS] ${PROJECT_NAME} deployed",
+                            body: """DEPLOYMENT SUCCESS — ${PROJECT_NAME}
 
-Commit:  ${env.GIT_COMMIT_MSG}
-Author:  ${env.GIT_COMMITTER_NAME} <${env.GIT_COMMITTER_EMAIL}>
-Branch:  ${env.GIT_BRANCH}
-Jenkins: ${env.BUILD_URL}
+Commit:  ${GIT_COMMIT_MSG}
+Author:  ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
+Branch:  ${GIT_BRANCH}
+Jenkins: ${BUILD_URL}
 
-Application deployed successfully with Ansible.
-- Test DB: H2 in-memory
-- Prod DB: MySQL (PRAVE_Vinuth-db)
-- MySQL backup saved.""",
-                            mimeType: 'text/plain'
+Deployed: Test DB=H2 in-memory, Prod DB=MySQL (PRAVE_Vinuth-db), Backup saved.""",
+                            mimeType: 'text/plain',
+                            attachLog: true
                         )
                     }
                 }
@@ -159,12 +158,11 @@ Application deployed successfully with Ansible.
     }
 
     post {
-        // Global failure handler — catches failures from any stage
         failure {
-            echo "Pipeline FAILED — notifications sent to committer (${env.GIT_COMMITTER_EMAIL}) and CC (${env.ALERT_CC_EMAIL})"
+            echo "Pipeline FAILED — email sent to ${EMAIL_RECIPIENTS}"
         }
         success {
-            echo "Pipeline SUCCESS — ${env.PROJECT_NAME} built, tested, and deployed"
+            echo "Pipeline SUCCESS — ${PROJECT_NAME} built, tested, and deployed"
         }
     }
 }
