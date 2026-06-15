@@ -9,7 +9,7 @@ pipeline {
     // ─── Environment variables ──────────────────────────────────────────────
     environment {
         PROJECT_NAME     = 'Football Terrain Rental'
-        CC_EMAIL         = 'sokhompanha70@gmail.com'
+        CC_EMAIL         = 'srengty@gmail.com'
         ANSIBLE_DIR      = 'ansible'
     }
 
