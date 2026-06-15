@@ -157,7 +157,7 @@
   hosts: localhost
   connection: local
   vars:
-    pma_port: 8081
+    pma_port: 8088
 
   tasks:
     - name: Check if phpMyAdmin container exists
