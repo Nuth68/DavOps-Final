@@ -29,7 +29,7 @@ pipeline {
         stage('Build') {
             steps {
                 echo 'Building application with Maven...'
-                sh './mvnw clean compile -B'
+                sh './mvnw clean compile -B -e'
             }
         }
 
