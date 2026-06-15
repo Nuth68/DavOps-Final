@@ -1,0 +1,19 @@
+---
+- hosts: web_servers
+  vars:
+    app_dir: /app
+  tasks:
+    - name: Run tests with H2 test database
+      shell: ./mvnw test -Dspring.profiles.active=test 2>&1
+      args:
+        chdir: "{{ app_dir }}"
+      register: test_result
+      failed_when: false
+
+    - name: Test output
+      debug:
+        msg: "{{ test_result.stdout_lines }}"
+
+    - name: Test summary
+      debug:
+        msg: "Test DB: H2 in-memory | Prod DB: MySQL PRAVE_Vinuth-db | Result: {{ 'PASSED' if test_result.rc == 0 else 'FAILED' }}"

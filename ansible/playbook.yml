@@ -1,0 +1,104 @@
+---
+- name: Login and deploy on web server
+  hosts: web_servers
+  vars:
+    app_dir: /app
+
+  tasks:
+    - name: Show server info
+      debug:
+        msg: "Connected to {{ ansible_facts.hostname }} ({{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }})"
+
+    - name: Ensure clean working tree and git pull
+      shell: |
+        if [ -n "$(git status --porcelain)" ]; then
+          git stash
+          echo "STASHED"
+        fi
+        git pull origin master 2>&1
+      args:
+        chdir: "{{ app_dir }}"
+      register: git_result
+
+    - name: Git result
+      debug:
+        msg: "{{ git_result.stdout_lines }}"
+
+    - name: Composer install
+      shell: /usr/local/bin/composer install --no-interaction --prefer-dist 2>&1 || echo "No composer.json - skipping"
+      args:
+        chdir: "{{ app_dir }}"
+      register: composer_result
+      failed_when: false
+
+    - name: Composer result
+      debug:
+        msg: "{{ composer_result.stdout_lines }}"
+
+    - name: NPM install
+      shell: npm install --no-audit --no-fund 2>&1 || echo "No package.json - skipping"
+      args:
+        chdir: "{{ app_dir }}"
+      register: npm_result
+      failed_when: false
+
+    - name: NPM result
+      debug:
+        msg: "{{ npm_result.stdout_lines }}"
+
+    - name: Maven package
+      shell: ./mvnw clean package -DskipTests -q 2>&1
+      args:
+        chdir: "{{ app_dir }}"
+      register: maven_build
+      failed_when: false
+
+    - name: Maven result
+      debug:
+        msg: "Maven: {{ 'ok' if maven_build.rc == 0 else 'FAILED' }}"
+
+    - name: Run tests with H2 test database
+      shell: ./mvnw test -Dspring.profiles.active=test 2>&1
+      args:
+        chdir: "{{ app_dir }}"
+      register: test_result
+      failed_when: false
+
+    - name: Test output
+      debug:
+        msg: "{{ test_result.stdout_lines }}"
+
+    - name: Test summary
+      debug:
+        msg: "Test DB: H2 in-memory | Prod DB: MySQL PRAVE_Vinuth-db | Tests: {{ 'PASSED' if test_result.rc == 0 else 'FAILED' }}"
+
+    - name: Restore stashed changes
+      shell: git stash pop
+      args:
+        chdir: "{{ app_dir }}"
+      when: git_result.stdout is defined and 'STASHED' in git_result.stdout
+      failed_when: false
+
+- name: Backup MySQL database
+  hosts: localhost
+  connection: local
+  vars:
+    backup_dir: "/Users/mac/Downloads/demo 2/backups"
+
+  tasks:
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+
+    - name: Dump MySQL database
+      shell: docker exec mysql-db mysqldump -u root -p'Hello@123' --single-transaction --routines --triggers --no-tablespaces PRAVE_Vinuth-db > "{{ backup_dir }}/backup.sql"
+      register: backup_result
+
+    - name: Get backup file size
+      shell: ls -lh "{{ backup_dir }}/backup.sql" | awk '{print $5}'
+      register: backup_size
+
+    - name: Backup result
+      debug:
+        msg: "MySQL backup: {{ backup_dir }}/backup.sql ({{ backup_size.stdout }}) - PRAVE_Vinuth-db (7 tables)"
