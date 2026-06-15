@@ -8,6 +8,7 @@ pipeline {
     environment {
         PROJECT_NAME   = 'Football Terrain Rental'
         ALERT_EMAIL    = 'pravevinuth888@gmail.com'
+        EMAIL_FROM     = 'pravevinuth888@gmail.com'
     }
 
     stages {
@@ -64,6 +65,7 @@ pipeline {
                 failure {
                     emailext(
                         to: env.EMAIL_RECIPIENTS,
+                        from: env.EMAIL_FROM,
                         subject: "[BUILD FAILED] ${env.PROJECT_NAME}",
                         body: """BUILD FAILED — ${env.PROJECT_NAME}
 
@@ -96,6 +98,7 @@ Check logs for details.""",
                 failure {
                     emailext(
                         to: env.EMAIL_RECIPIENTS,
+                        from: env.EMAIL_FROM,
                         subject: "[TEST FAILED] ${env.PROJECT_NAME}",
                         body: """TEST FAILED — ${env.PROJECT_NAME}
 
@@ -162,6 +165,7 @@ Tests failed. Check logs.""",
                 success {
                     emailext(
                         to: env.EMAIL_RECIPIENTS,
+                        from: env.EMAIL_FROM,
                         subject: "[DEPLOY SUCCESS] ${env.PROJECT_NAME}",
                         body: """DEPLOYMENT COMPLETE — ${env.PROJECT_NAME}
 
@@ -176,6 +180,7 @@ Build + Test + Deploy pipeline finished.""",
                 failure {
                     emailext(
                         to: env.EMAIL_RECIPIENTS,
+                        from: env.EMAIL_FROM,
                         subject: "[DEPLOY FAILED] ${env.PROJECT_NAME}",
                         body: """DEPLOYMENT FAILED — ${env.PROJECT_NAME}
 
