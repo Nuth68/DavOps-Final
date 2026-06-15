@@ -1,0 +1,8 @@
+Tables_in_PRAVE_Vinuth-db
+bookings
+favorites
+payments
+reviews
+terrain_images
+terrains
+users
