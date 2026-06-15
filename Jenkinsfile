@@ -47,7 +47,7 @@ pipeline {
             }
         }
 
-        // ─── Stage 4: Deploy via Ansible ────────────────────────────────────
+        // ─── Stage 4: Deploy via Ansible (Web Server + CHOICE_A LB) ─────────
         stage('Deploy') {
             when {
                 expression {
@@ -55,7 +55,7 @@ pipeline {
                 }
             }
             steps {
-                echo 'Deploying to Web Server via Ansible...'
+                echo 'Deploying Web Server + CHOICE_A Load Balancer via Ansible...'
 
                 script {
                     // Detect Docker and set the right Ansible host
@@ -78,6 +78,8 @@ pipeline {
                         cd ${ANSIBLE_DIR}
                         sed -i "s/ansible_host=[^ ]*/ansible_host=${ansibleHost}/" inventory.ini
                         export ANSIBLE_HOST_KEY_CHECKING=False
+
+                        echo '=== Deploying Web Server + CHOICE_A Load Balancer ==='
                         ansible-playbook -i inventory.ini playbook.yml -v
                         ANSIBLE_EXIT=\$?
 
@@ -85,17 +87,19 @@ pipeline {
                         echo '=============================================='
                         case \$ANSIBLE_EXIT in
                             0)
-                                echo '✓ Ansible deploy SUCCESS'
+                                echo '✓ Deploy SUCCESS'
+                                echo '  Web Server:   http://localhost:8080'
+                                echo '  CHOICE_A LB:  http://localhost:8090'
+                                echo '  SSH (web):    localhost:2222'
+                                echo '  SSH (lb):     localhost:2200'
                                 ;;
                             4)
-                                echo '⚠  Web server UNREACHABLE'
+                                echo '⚠  Host UNREACHABLE'
                                 echo '  Start containers: docker-compose up -d'
-                                echo '  (Run this on your Mac host, not in Jenkins)'
                                 ;;
                             *)
                                 echo '⚠  Ansible exit code: '\$ANSIBLE_EXIT
-                                echo '  Web server may not be running.'
-                                echo '  Start: docker-compose up -d'
+                                echo '  Start containers: docker-compose up -d'
                                 ;;
                         esac
                         echo '=============================================='
@@ -112,12 +116,14 @@ pipeline {
             echo 'Pipeline completed successfully!'
             emailext(
                 subject: "[Jenkins] ✅ SUCCESS: ${PROJECT_NAME} #${BUILD_NUMBER}",
-                body: """<p>Build and tests passed. Deploy completed.</p>
+                body: """<p>Build, test, and deploy completed successfully.</p>
 <ul>
   <li><b>Project:</b> ${PROJECT_NAME}</li>
   <li><b>Build:</b> #${BUILD_NUMBER}</li>
   <li><b>Branch:</b> ${GIT_BRANCH}</li>
   <li><b>Commit:</b> ${GIT_COMMIT}</li>
+  <li><b>Web Server:</b> http://localhost:8080</li>
+  <li><b>CHOICE_A LB:</b> http://localhost:8090</li>
 </ul>
 <p><a href="${BUILD_URL}">View Build</a></p>""",
                 mimeType: 'text/html',

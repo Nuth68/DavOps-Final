@@ -1,4 +1,5 @@
 ---
+# ─── Deploy to Web Servers ─────────────────────────────────────────────
 - name: Login and deploy on web server
   hosts: web_servers
   vars:
@@ -79,6 +80,79 @@
       when: git_result.stdout is defined and 'STASHED' in git_result.stdout
       failed_when: false
 
+# ─── Deploy to CHOICE_A Load Balancer ──────────────────────────────────
+- name: Deploy to CHOICE_A Load Balancer
+  hosts: load_balancers
+  vars:
+    app_dir: /app
+    lb_name: CHOICE_A
+
+  tasks:
+    - name: Show load balancer info
+      debug:
+        msg: "{{ lb_name }} Load Balancer on {{ ansible_facts.hostname }} ({{ ansible_facts.distribution }})"
+
+    - name: Ensure clean working tree and git pull
+      shell: |
+        if [ -n "$(git status --porcelain)" ]; then
+          git stash
+          echo "STASHED"
+        fi
+        git pull origin master 2>&1
+      args:
+        chdir: "{{ app_dir }}"
+      register: git_result
+
+    - name: Git pull result
+      debug:
+        msg: "{{ git_result.stdout_lines }}"
+
+    - name: Verify nginx load balancer config
+      shell: nginx -t 2>&1
+      register: nginx_test
+      failed_when: false
+
+    - name: Nginx config test result
+      debug:
+        msg: "Nginx config: {{ 'OK' if nginx_test.rc == 0 else 'WARNING' }}"
+
+    - name: Reload nginx
+      shell: nginx -s reload 2>&1 || nginx 2>&1
+      register: nginx_reload
+      failed_when: false
+
+    - name: Nginx reload result
+      debug:
+        msg: "Nginx reload: {{ 'OK' if nginx_reload.rc == 0 else 'WARNING' }}"
+
+    - name: Health check — CHOICE_A load balancer
+      uri:
+        url: "http://127.0.0.1:80/health"
+        return_content: yes
+      register: health
+      failed_when: false
+
+    - name: Health check result
+      debug:
+        msg: "{{ lb_name }} at localhost:8090 — {{ health.content if health.content else 'UNREACHABLE' }}"
+
+    - name: Restore stashed changes
+      shell: git stash pop
+      args:
+        chdir: "{{ app_dir }}"
+      when: git_result.stdout is defined and 'STASHED' in git_result.stdout
+      failed_when: false
+
+    - name: CHOICE_A deploy summary
+      debug:
+        msg:
+          - "{{ lb_name }} Load Balancer deployed"
+          - "Website: http://localhost:8090"
+          - "SSH: localhost:2200 (ansible_port=2200)"
+          - "Backend: web-server:80"
+          - "Virtual IP: host.docker.internal"
+
+# ─── Backup MySQL Database ─────────────────────────────────────────────
 - name: Backup MySQL database
   hosts: localhost
   connection: local

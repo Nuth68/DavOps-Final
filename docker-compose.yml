@@ -1,5 +1,33 @@
 services:
 
+  # ─── CHOICE_A Load Balancer ──────────────────────────────────────────
+  lb:
+    build: .
+    container_name: choice-a-lb
+    ports:
+      - "8090:80"
+      - "2200:22"
+    volumes:
+      - .:/app
+      - ./nginx/lb-default.conf:/etc/nginx/sites-available/default:ro
+    working_dir: /app
+    depends_on:
+      - web
+    restart: always
+    command: >
+      bash -c "
+        echo 'CHOICE_A LB: waiting for web backend...' &&
+        until curl -s --connect-timeout 2 web:80 &>/dev/null; do
+          echo '  still waiting...'; sleep 2;
+        done &&
+        echo 'CHOICE_A LB: web backend reachable, starting nginx...' &&
+        rm -f /etc/nginx/sites-enabled/default &&
+        ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default &&
+        /usr/sbin/sshd &&
+        nginx -g 'daemon off;'
+      "
+
+  # ─── Web Server ──────────────────────────────────────────────────────
   web:
     build: .
     container_name: web-server
@@ -11,7 +39,13 @@ services:
     working_dir: /app
     depends_on:
       - db
+    command: >
+      bash -c "
+        /usr/sbin/sshd &&
+        nginx -g 'daemon off;'
+      "
 
+  # ─── MySQL Database ──────────────────────────────────────────────────
   db:
     image: mysql:8.0
     container_name: mysql-db
