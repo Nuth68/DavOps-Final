@@ -8,9 +8,6 @@ pipeline {
     environment {
         PROJECT_NAME      = 'Football Terrain Rental'
         ALERT_CC_EMAIL    = 'pravevinuth888@gmail.com'
-        // Jenkins on macOS doesn't include Homebrew paths — add them explicitly
-        PATH              = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH}"
-        JAVA_HOME         = '/opt/homebrew/Cellar/openjdk/25.0.2/libexec/openjdk.jdk/Contents/Home'
     }
 
     stages {
@@ -20,8 +17,8 @@ pipeline {
                 checkout scm
                 script {
                     sh 'chmod +x ./mvnw'
-                    sh 'echo "PATH=$PATH"; echo "JAVA_HOME=$JAVA_HOME"; which java; java -version 2>&1; which ansible-playbook'
 
+                    // Capture committer info (MUST happen before any failure skips it)
                     env.GIT_COMMITTER_EMAIL = sh(
                         script: "git --no-pager log -1 --format='%ae' HEAD",
                         returnStdout: true
@@ -35,8 +32,30 @@ pipeline {
                         returnStdout: true
                     ).trim()
                     env.EMAIL_RECIPIENTS = "${env.GIT_COMMITTER_EMAIL}, ${env.ALERT_CC_EMAIL}"
+
                     echo "Last commit by: ${env.GIT_COMMITTER_NAME} <${env.GIT_COMMITTER_EMAIL}>"
                     echo "Message: ${env.GIT_COMMIT_MSG}"
+
+                    // Diagnostic: show what tools are available (non-fatal)
+                    sh '''#!/bin/bash
+                        echo "=== Environment ==="
+                        echo "PATH=$PATH"
+                        echo "JAVA_HOME=$JAVA_HOME"
+                        echo ""
+                        echo "=== Java ==="
+                        which java || echo "java NOT FOUND"
+                        java -version 2>&1 || true
+                        echo ""
+                        echo "=== Maven ==="
+                        which mvn || echo "mvn NOT FOUND"
+                        ./mvnw --version 2>&1 || true
+                        echo ""
+                        echo "=== Ansible ==="
+                        which ansible-playbook || echo "ansible-playbook NOT FOUND — will install if needed"
+                        echo ""
+                        echo "=== Python/pip ==="
+                        which python3 || which python || echo "python NOT FOUND"
+                    '''
                 }
             }
         }
@@ -50,7 +69,7 @@ pipeline {
                 failure {
                     script {
                         emailext(
-                            to: env.EMAIL_RECIPIENTS,
+                            to: env.EMAIL_RECIPIENTS ?: env.ALERT_CC_EMAIL,
                             subject: "[BUILD FAILED] ${PROJECT_NAME}",
                             body: """BUILD FAILURE — ${PROJECT_NAME}
 
@@ -77,7 +96,7 @@ Check console output for details.""",
                 failure {
                     script {
                         emailext(
-                            to: env.EMAIL_RECIPIENTS,
+                            to: env.EMAIL_RECIPIENTS ?: env.ALERT_CC_EMAIL,
                             subject: "[TEST FAILED] ${PROJECT_NAME}",
                             body: """TEST FAILURE — ${PROJECT_NAME}
 
@@ -103,7 +122,25 @@ Tests failed. Check console output.""",
             }
             steps {
                 echo 'Running Ansible playbook to deploy to web server...'
-                sh '''
+                sh '''#!/bin/bash
+                    # Install ansible if not present (Jenkins Docker agent may not have it)
+                    if ! command -v ansible-playbook &>/dev/null; then
+                        echo "Installing ansible..."
+                        if command -v apt-get &>/dev/null; then
+                            apt-get update -qq && apt-get install -y -qq ansible
+                        elif command -v pip3 &>/dev/null; then
+                            pip3 install ansible
+                        elif command -v pip &>/dev/null; then
+                            pip install ansible
+                        elif command -v brew &>/dev/null; then
+                            brew install ansible
+                        else
+                            echo "ERROR: Cannot install ansible — no package manager found"
+                            exit 1
+                        fi
+                    fi
+                    ansible-playbook --version
+
                     cd ansible
                     ansible-playbook -i inventory.ini playbook.yml -v
                 '''
@@ -112,7 +149,7 @@ Tests failed. Check console output.""",
                 failure {
                     script {
                         emailext(
-                            to: env.EMAIL_RECIPIENTS,
+                            to: env.EMAIL_RECIPIENTS ?: env.ALERT_CC_EMAIL,
                             subject: "[DEPLOY FAILED] ${PROJECT_NAME}",
                             body: """DEPLOYMENT FAILURE — ${PROJECT_NAME}
 
@@ -130,7 +167,7 @@ Ansible playbook failed. Check console output.""",
                 success {
                     script {
                         emailext(
-                            to: env.EMAIL_RECIPIENTS,
+                            to: env.EMAIL_RECIPIENTS ?: env.ALERT_CC_EMAIL,
                             subject: "[DEPLOY SUCCESS] ${PROJECT_NAME} deployed",
                             body: """DEPLOYMENT SUCCESS — ${PROJECT_NAME}
 
