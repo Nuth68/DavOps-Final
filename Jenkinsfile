@@ -1,206 +1,152 @@
 pipeline {
     agent any
 
+    // ─── Poll Git every 5 minutes for changes ───────────────────────────────
     triggers {
         pollSCM('H/5 * * * *')
     }
 
+    // ─── Environment variables ──────────────────────────────────────────────
     environment {
-        PROJECT_NAME   = 'Football Terrain Rental'
-        ALERT_EMAIL    = 'pravevinuth888@gmail.com'
-        EMAIL_FROM     = 'pravevinuth888@gmail.com'
+        PROJECT_NAME     = 'Football Terrain Rental'
+        CC_EMAIL         = 'pravevinuth888@gmail.com'
+        ANSIBLE_DIR      = 'ansible'
     }
 
     stages {
 
+        // ─── Stage 1: Checkout ──────────────────────────────────────────────
         stage('Checkout') {
             steps {
                 checkout scm
-
                 script {
-                    sh 'chmod -R +x . || true'
-
-                    def commitEmail = sh(script: "git log -1 --pretty=format:'%ae' || true", returnStdout: true).trim()
-                    def commitName  = sh(script: "git log -1 --pretty=format:'%an' || true", returnStdout: true).trim()
-                    def commitMsg   = sh(script: "git log -1 --pretty=format:'%s' || true", returnStdout: true).trim()
-
-                    if (commitEmail == "" || commitEmail == "null") {
-                        commitEmail = env.ALERT_EMAIL
-                    }
-
-                    env.GIT_COMMITTER_EMAIL = commitEmail
-                    env.GIT_COMMITTER_NAME  = commitName
-                    env.GIT_COMMIT_MSG      = commitMsg
-                    env.EMAIL_RECIPIENTS = "${commitEmail},${env.ALERT_EMAIL}"
-
-                    echo "Committer: ${commitName} <${commitEmail}>"
-                    echo "Message: ${commitMsg}"
-
-                    // Detect if running inside Docker — set the right host for Ansible
-                    env.IS_DOCKER = sh(
-                        script: 'grep -q docker /proc/1/cgroup 2>/dev/null && echo "yes" || echo "no"',
-                        returnStdout: true
-                    ).trim()
-                    env.ANSIBLE_HOST = (env.IS_DOCKER == 'yes') ? 'host.docker.internal' : '127.0.0.1'
-                    echo "Jenkins is in Docker: ${env.IS_DOCKER} → Ansible host: ${env.ANSIBLE_HOST}"
+                    sh 'chmod +x ./mvnw'
                 }
             }
         }
 
+        // ─── Stage 2: Build ─────────────────────────────────────────────────
         stage('Build') {
             steps {
-                script {
-                    sh '''
-                        echo "=== BUILD STAGE ==="
-                        if [ -f mvnw ]; then
-                            chmod +x mvnw
-                            ./mvnw clean compile -e
-                        else
-                            mvn clean compile -e
-                        fi
-                    '''
-                }
-            }
-            post {
-                failure {
-                    emailext(
-                        to: env.EMAIL_RECIPIENTS,
-                        from: env.EMAIL_FROM,
-                        subject: "[BUILD FAILED] ${env.PROJECT_NAME}",
-                        body: """BUILD FAILED — ${env.PROJECT_NAME}
-
-Commit: ${env.GIT_COMMIT_MSG}
-Author: ${env.GIT_COMMITTER_NAME} <${env.GIT_COMMITTER_EMAIL}>
-Jenkins: ${env.BUILD_URL}
-
-Check logs for details.""",
-                        mimeType: 'text/plain',
-                        attachLog: true
-                    )
-                }
+                echo 'Building application with Maven...'
+                sh './mvnw clean compile -B'
             }
         }
 
+        // ─── Stage 3: Test ──────────────────────────────────────────────────
         stage('Test') {
             steps {
-                script {
-                    sh '''
-                        echo "=== TEST STAGE ==="
-                        if [ -f mvnw ]; then
-                            ./mvnw test
-                        else
-                            mvn test
-                        fi
-                    '''
-                }
+                echo 'Running tests with H2 in-memory test database...'
+                sh './mvnw -Dspring.profiles.active=test -B test'
             }
             post {
-                failure {
-                    emailext(
-                        to: env.EMAIL_RECIPIENTS,
-                        from: env.EMAIL_FROM,
-                        subject: "[TEST FAILED] ${env.PROJECT_NAME}",
-                        body: """TEST FAILED — ${env.PROJECT_NAME}
-
-Commit: ${env.GIT_COMMIT_MSG}
-Author: ${env.GIT_COMMITTER_NAME}
-Jenkins: ${env.BUILD_URL}
-
-Tests failed. Check logs.""",
-                        attachLog: true
-                    )
+                always {
+                    junit testResults: '**/target/surefire-reports/*.xml',
+                          allowEmptyResults: true
                 }
             }
         }
 
-        stage('Deploy with Ansible') {
-            steps {
-                script {
-                    sh '''
-                        echo "=== DEPLOY STAGE ==="
-
-                        # Install ansible if missing
-                        if ! command -v ansible-playbook &>/dev/null; then
-                            echo "Installing Ansible..."
-                            if command -v apt-get &>/dev/null; then
-                                apt-get update -qq && apt-get install -y -qq ansible
-                            elif command -v pip3 &>/dev/null; then
-                                pip3 install ansible
-                            else
-                                echo "ERROR: Cannot install Ansible" && exit 1
-                            fi
-                        fi
-                        ansible-playbook --version
-
-                        # Patch inventory to use correct host (host.docker.internal when in Docker, 127.0.0.1 otherwise)
-                        cd ansible
-                        echo "Original inventory:"
-                        cat inventory.ini
-                        sed -i "s/ansible_host=[^ ]*/ansible_host=${ANSIBLE_HOST}/" inventory.ini
-                        echo "Patched inventory:"
-                        cat inventory.ini
-
-                        # Pause SSH host key checking for first connection
-                        export ANSIBLE_HOST_KEY_CHECKING=False
-
-                        # Run playbook — if host is unreachable, mark as warning not fatal
-                        ansible-playbook -i inventory.ini playbook.yml -v 2>&1
-                        ANSIBLE_EXIT=$?
-
-                        if [ $ANSIBLE_EXIT -eq 4 ]; then
-                            echo "WARNING: Web server unreachable (containers may not be running)."
-                            echo "Start them with: docker-compose up -d (on the host machine, not in Jenkins)"
-                            # Exit 0 so pipeline succeeds — unreachable is expected if containers are down
-                            exit 0
-                        elif [ $ANSIBLE_EXIT -ne 0 ]; then
-                            echo "ERROR: Ansible failed with exit code $ANSIBLE_EXIT"
-                            exit $ANSIBLE_EXIT
-                        fi
-
-                        echo "Deploy completed successfully."
-                    '''
+        // ─── Stage 4: Deploy via Ansible ────────────────────────────────────
+        stage('Deploy') {
+            when {
+                expression {
+                    currentBuild.result == null || currentBuild.result == 'SUCCESS'
                 }
             }
-            post {
-                success {
-                    emailext(
-                        to: env.EMAIL_RECIPIENTS,
-                        from: env.EMAIL_FROM,
-                        subject: "[DEPLOY SUCCESS] ${env.PROJECT_NAME}",
-                        body: """DEPLOYMENT COMPLETE — ${env.PROJECT_NAME}
+            steps {
+                echo 'Deploying to Web Server via Ansible...'
 
-Commit: ${env.GIT_COMMIT_MSG}
-Author: ${env.GIT_COMMITTER_NAME}
-Jenkins: ${env.BUILD_URL}
+                script {
+                    // Detect Docker and set the right Ansible host
+                    def isDocker = sh(
+                        script: '[ -f /.dockerenv ] && echo yes || echo no',
+                        returnStdout: true
+                    ).trim()
+                    def ansibleHost = (isDocker == 'yes') ? 'host.docker.internal' : '127.0.0.1'
+                    echo "Docker: ${isDocker} → Ansible host: ${ansibleHost}"
 
-Build + Test + Deploy pipeline finished.""",
-                        attachLog: true
-                    )
-                }
-                failure {
-                    emailext(
-                        to: env.EMAIL_RECIPIENTS,
-                        from: env.EMAIL_FROM,
-                        subject: "[DEPLOY FAILED] ${env.PROJECT_NAME}",
-                        body: """DEPLOYMENT FAILED — ${env.PROJECT_NAME}
+                    // Install Ansible if missing, patch inventory, run playbook
+                    sh """
+                        set +e
+                        if ! command -v ansible-playbook &>/dev/null; then
+                            apt-get update -qq && apt-get install -y -qq ansible 2>/dev/null || pip3 install ansible 2>/dev/null
+                        fi
 
-Commit: ${env.GIT_COMMIT_MSG}
-Jenkins: ${env.BUILD_URL}
+                        cd ${ANSIBLE_DIR}
+                        sed -i "s/ansible_host=[^ ]*/ansible_host=${ansibleHost}/" inventory.ini
+                        export ANSIBLE_HOST_KEY_CHECKING=False
+                        ansible-playbook -i inventory.ini playbook.yml -v
+                        ANSIBLE_EXIT=\$?
 
-Ansible playbook failed. Check logs.""",
-                        attachLog: true
-                    )
+                        if [ \$ANSIBLE_EXIT -eq 4 ]; then
+                            echo 'WARNING: Web server unreachable (containers not running)'
+                            echo 'Start with: docker-compose up -d'
+                            exit 0
+                        elif [ \$ANSIBLE_EXIT -ne 0 ]; then
+                            exit \$ANSIBLE_EXIT
+                        fi
+                    """
                 }
             }
         }
     }
 
+    // ─── Post-pipeline notifications ────────────────────────────────────────
     post {
         success {
-            echo "PIPELINE SUCCESS — ${env.PROJECT_NAME} built, tested, and deployed"
+            echo 'Pipeline completed successfully!'
+            emailext(
+                subject: "[Jenkins] ✅ SUCCESS: ${PROJECT_NAME} #${BUILD_NUMBER}",
+                body: """<p>Build and tests passed. Deploy completed.</p>
+<ul>
+  <li><b>Project:</b> ${PROJECT_NAME}</li>
+  <li><b>Build:</b> #${BUILD_NUMBER}</li>
+  <li><b>Branch:</b> ${GIT_BRANCH}</li>
+  <li><b>Commit:</b> ${GIT_COMMIT}</li>
+</ul>
+<p><a href="${BUILD_URL}">View Build</a></p>""",
+                mimeType: 'text/html',
+                to: env.CC_EMAIL,
+                recipientProviders: [[$class: 'DevelopersRecipientProvider']]
+            )
         }
         failure {
-            echo "PIPELINE FAILED — emails sent to ${env.EMAIL_RECIPIENTS}"
+            echo 'Pipeline FAILED — sending error email...'
+            emailext(
+                subject: "[Jenkins] ❌ FAILED: ${PROJECT_NAME} #${BUILD_NUMBER}",
+                body: """<p>The build has <b>FAILED</b>.</p>
+<ul>
+  <li><b>Project:</b> ${PROJECT_NAME}</li>
+  <li><b>Build:</b> #${BUILD_NUMBER}</li>
+  <li><b>Branch:</b> ${GIT_BRANCH}</li>
+  <li><b>Commit:</b> ${GIT_COMMIT}</li>
+</ul>
+<p><a href="${BUILD_URL}console">View Console Output</a></p>""",
+                mimeType: 'text/html',
+                to: env.CC_EMAIL,
+                recipientProviders: [
+                    [$class: 'DevelopersRecipientProvider'],
+                    [$class: 'RequesterRecipientProvider']
+                ]
+            )
+        }
+        unstable {
+            echo 'Pipeline UNSTABLE (test failures).'
+            emailext(
+                subject: "[Jenkins] ⚠️ UNSTABLE: ${PROJECT_NAME} #${BUILD_NUMBER}",
+                body: """<p>Build is <b>UNSTABLE</b> — tests failed.</p>
+<ul>
+  <li><b>Project:</b> ${PROJECT_NAME}</li>
+  <li><b>Build:</b> #${BUILD_NUMBER}</li>
+  <li><b>Branch:</b> ${GIT_BRANCH}</li>
+  <li><b>Commit:</b> ${GIT_COMMIT}</li>
+</ul>
+<p><a href="${BUILD_URL}testReport">View Test Report</a></p>""",
+                mimeType: 'text/html',
+                to: env.CC_EMAIL,
+                recipientProviders: [[$class: 'DevelopersRecipientProvider']]
+            )
         }
     }
 }
